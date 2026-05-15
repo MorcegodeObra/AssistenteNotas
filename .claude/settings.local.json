@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh release *)",
+      "PowerShell(gh release list --repo MorcegodeObra/AssistenteNotas 2>&1)"
+    ]
+  }
+}
