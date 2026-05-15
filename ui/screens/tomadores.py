@@ -3,6 +3,7 @@ import customtkinter as ctk
 
 from ui.helper import make_label
 from ui.widgets import SectionCard, LabeledEntry, StatusLabel
+from utils import mascaras
 from functions.tomador import Tomador
 from functions.dadosNota import DadosNota
 from config.api import api
@@ -38,9 +39,11 @@ class TelaTomadores(ctk.CTkFrame):
             lista_api = api.listar_tomadores()
             notas_api = api.listar_notas()
 
-            notas_por_tomador = {
-                n["tomadorId"]: n for n in notas_api if n.get("tomadorId")
-            }
+            notas_por_tomador: dict[str, list] = {}
+            for n in notas_api:
+                tid = n.get("tomadorId")
+                if tid:
+                    notas_por_tomador.setdefault(tid, []).append(n)
 
             carregados: list[Tomador] = []
             for item in lista_api:
@@ -52,12 +55,12 @@ class TelaTomadores(ctk.CTkFrame):
                     cep=item.get("cep", ""),
                 )
                 t.uuid = item.get("uuid")
-                nota_dados = notas_por_tomador.get(t.uuid)
-                if nota_dados:
-                    t.dadosNota = DadosNota.do_json(nota_dados, t.uuid)
+                t.dadosNotas = [
+                    DadosNota.do_json(n, t.uuid)
+                    for n in notas_por_tomador.get(t.uuid, [])
+                ]
                 carregados.append(t)
 
-            # atualiza a lista compartilhada in-place
             self.tomadores.clear()
             self.tomadores.extend(carregados)
             self._carregado = True
@@ -140,13 +143,25 @@ class TelaTomadores(ctk.CTkFrame):
         self.e_nome.pack(anchor="w")
         self.e_nome.set(tomador.nome or "")
 
+        # CPF/CNPJ — máscara em tempo real, máx. 14 dígitos (CNPJ)
         self.e_cpfcnpj = LabeledEntry(card.inner, "CPF / CNPJ", "000.000.000-00", width=340)
         self.e_cpfcnpj.pack(anchor="w")
-        self.e_cpfcnpj.set(tomador.cpfCnpj or "")
+        self.e_cpfcnpj.set(mascaras.cpf_cnpj(tomador.cpfCnpj or ""))
+        self.e_cpfcnpj.bind(
+            "<KeyRelease>",
+            lambda _: mascaras.aplicar(self.e_cpfcnpj, mascaras.cpf_cnpj),
+            "+",
+        )
 
-        self.e_tel = LabeledEntry(card.inner, "Telefone", "(44) 99999-9999", width=340)
+        # Telefone — máscara em tempo real, máx. 11 dígitos
+        self.e_tel = LabeledEntry(card.inner, "Telefone", "(44) 9 9999-9999", width=340)
         self.e_tel.pack(anchor="w")
-        self.e_tel.set(tomador.telefone or "")
+        self.e_tel.set(mascaras.telefone(tomador.telefone or ""))
+        self.e_tel.bind(
+            "<KeyRelease>",
+            lambda _: mascaras.aplicar(self.e_tel, mascaras.telefone),
+            "+",
+        )
 
         self.e_email = LabeledEntry(card.inner, "E-mail", "email@email.com", width=340)
         self.e_email.pack(anchor="w")
@@ -178,24 +193,25 @@ class TelaTomadores(ctk.CTkFrame):
             return
         t = self.selecionado
         t.nome = self.e_nome.get()
-        t.cpfCnpj = self.e_cpfcnpj.get()
-        t.telefone = self.e_tel.get()
-        t.email = self.e_email.get()
+        # remove máscara antes de salvar
+        t.cpfCnpj  = "".join(filter(str.isdigit, self.e_cpfcnpj.get()))
+        t.telefone = "".join(filter(str.isdigit, self.e_tel.get()))
+        t.email    = self.e_email.get()
 
         try:
             if t.uuid:
                 api.salvar_tomador(t.uuid, {
-                    "nome": t.nome,
+                    "nome":        t.nome,
                     "documentoId": t.cpfCnpj,
-                    "telefone": t.telefone,
-                    "email": t.email,
+                    "telefone":    t.telefone,
+                    "email":       t.email,
                 })
             else:
                 resposta = api.criar_tomador({
-                    "nome": t.nome,
+                    "nome":        t.nome,
                     "documentoId": t.cpfCnpj,
-                    "telefone": t.telefone,
-                    "email": t.email,
+                    "telefone":    t.telefone,
+                    "email":       t.email,
                 })
                 t.uuid = resposta.get("uuid", "")
             self.lbl_status.success("✓ Tomador salvo.")
@@ -219,7 +235,7 @@ class TelaTomadores(ctk.CTkFrame):
             self.lbl_status.error(f"Erro ao excluir: {str(exc)[:60]}")
 
     def _novo_tomador(self) -> None:
-        novo = Tomador("", "", "", "Novo Tomador")
+        novo = Tomador("", "", "", "", "Novo Tomador")
         self.tomadores.append(novo)
         self._render_lista()
         self._selecionar(novo)

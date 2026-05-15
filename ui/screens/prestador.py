@@ -4,14 +4,20 @@ import customtkinter as ctk
 from ui.helper import make_label, to_float
 from ui.widgets import SectionCard, LabeledEntry, LabeledDropdown, StatusLabel
 from utils.mapas import construir_mapa
+from utils.mascaras import porcentagem_fmt, porcentagem_strip, porcentagem_para_float, moeda, moeda_para_float, aplicar
 from config.api import api
+
+
+def _bind_pct(entry: LabeledEntry) -> None:
+    """Configura FocusIn (strip %) e FocusOut (formata %) em um LabeledEntry."""
+    entry.bind("<FocusOut>", lambda e: entry.set(porcentagem_fmt(entry.get())), "+")
+    entry.bind("<FocusIn>",  lambda e: entry.set(porcentagem_strip(entry.get())), "+")
 
 
 class TelaPrestador(ctk.CTkScrollableFrame):
     def __init__(self, master, dados=None):
         super().__init__(master, fg_color="transparent")
         self.dados = dados
-        self.editando = False
         self.map_situacao: dict = {}
         self.map_retencao: dict = {}
         self._carregado = False
@@ -57,15 +63,19 @@ class TelaPrestador(ctk.CTkScrollableFrame):
 
         self.e_tributacao = LabeledEntry(card.inner, "% Tributação", width=320)
         self.e_tributacao.pack(anchor="w")
+        _bind_pct(self.e_tributacao)
 
         self.e_pis = LabeledEntry(card.inner, "% PIS", width=320)
         self.e_pis.pack(anchor="w")
+        _bind_pct(self.e_pis)
 
         self.e_cofins = LabeledEntry(card.inner, "% COFINS", width=320)
         self.e_cofins.pack(anchor="w")
+        _bind_pct(self.e_cofins)
 
-        self.e_csll = LabeledEntry(card.inner, "% CSLL", width=320)
+        self.e_csll = LabeledEntry(card.inner, "Valor CSLL (R$)", width=320)
         self.e_csll.pack(anchor="w")
+        self.e_csll.bind("<KeyRelease>", lambda _: aplicar(self.e_csll, moeda), "+")
 
         self.dd_pis_situacao = LabeledDropdown(
             card.inner, "PIS/COFINS Situação", [], width=320
@@ -77,58 +87,39 @@ class TelaPrestador(ctk.CTkScrollableFrame):
         )
         self.dd_pis_retencao.pack(anchor="w")
 
+        # Preenche valores numéricos já formatados como percentual
         if self.dados:
-            self.e_tributacao.set(str(self.dados.porcentagemTributacao or ""))
-            self.e_pis.set(str(self.dados.porcentagemPis or ""))
-            self.e_cofins.set(str(self.dados.porcentagemCofins or ""))
-            self.e_csll.set(str(self.dados.valorCsll or ""))
-
-        self._set_editavel(False)
+            self.e_tributacao.set(porcentagem_fmt(str(self.dados.porcentagemTributacao or "")))
+            self.e_pis.set(porcentagem_fmt(str(self.dados.porcentagemPis or "")))
+            self.e_cofins.set(porcentagem_fmt(str(self.dados.porcentagemCofins or "")))
+            try:
+                self.e_csll.set(moeda(str(int(round(float(self.dados.valorCsll) * 100)))))
+            except (TypeError, ValueError):
+                pass
 
         row = ctk.CTkFrame(card.inner, fg_color="transparent")
         row.pack(anchor="e", pady=(16, 0))
-        self.btn_editar = ctk.CTkButton(
-            row, text="Editar", width=120, command=self._toggle_edicao
+        self.btn_salvar = ctk.CTkButton(
+            row, text="Salvar", width=120, command=self._salvar
         )
-        self.btn_editar.pack(side="left")
+        self.btn_salvar.pack(side="left")
 
         self.lbl_status = StatusLabel(card.inner)
         self.lbl_status.pack(anchor="w", pady=(8, 0))
-
-    # ── Estado ────────────────────────────────────────────
-
-    def _set_editavel(self, ativo: bool) -> None:
-        estado = "normal" if ativo else "disabled"
-        for widget in (
-            self.e_tributacao, self.e_pis, self.e_cofins, self.e_csll,
-            self.dd_pis_situacao, self.dd_pis_retencao,
-        ):
-            widget.configure(state=estado)
-
-    def _toggle_edicao(self) -> None:
-        if not self.editando:
-            self.editando = True
-            self._set_editavel(True)
-            self.btn_editar.configure(text="Salvar")
-        else:
-            self._salvar()
 
     # ── Persistência ──────────────────────────────────────
 
     def _salvar(self) -> None:
         payload = {
-            "porcentagemTributacao": self.e_tributacao.get(),
-            "porcentagemPis": to_float(self.e_pis.get()),
-            "porcentagemCofins": to_float(self.e_cofins.get()),
-            "valorCsll": to_float(self.e_csll.get()),
-            "pisCofinsSituacao": self.map_situacao.get(self.dd_pis_situacao.get()),
-            "pisCofinsRetencao": self.map_retencao.get(self.dd_pis_retencao.get()),
+            "porcentagemTributacao": porcentagem_para_float(self.e_tributacao.get()),
+            "porcentagemPis":        porcentagem_para_float(self.e_pis.get()),
+            "porcentagemCofins":     porcentagem_para_float(self.e_cofins.get()),
+            "valorCsll":             moeda_para_float(self.e_csll.get()),
+            "pisCofinsSituacao":     self.map_situacao.get(self.dd_pis_situacao.get()),
+            "pisCofinsRetencao":     self.map_retencao.get(self.dd_pis_retencao.get()),
         }
         try:
             api.salvar_prestador(payload)
             self.lbl_status.success("✓ Dados atualizados com sucesso")
-            self.editando = False
-            self._set_editavel(False)
-            self.btn_editar.configure(text="Editar")
         except Exception as exc:
             self.lbl_status.error(f"Erro: {str(exc)[:60]}")

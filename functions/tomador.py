@@ -6,4 +6,4 @@ class Tomador:
         self.cep = cep
         self.nome = nome
         self.uuid = None
-        self.dadosNota = None
+        self.dadosNotas: list = []
