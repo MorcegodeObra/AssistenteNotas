@@ -12,6 +12,12 @@ APP_EXE_NAME = "AssistenteNotas.exe"
 VERSION_FILE = "version.txt"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
+# Personal Access Token para repositórios privados.
+# GitHub → Settings → Developer settings → Fine-grained tokens
+# Permissões: Contents (read-only) + Metadata (read-only)
+# Deixe "" para repositórios públicos.
+GITHUB_TOKEN = "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"
+
 BG = "#1a1a2e"
 FG = "white"
 FG_DIM = "#aaaaaa"
@@ -21,6 +27,8 @@ BTN_BLUE = "#4a90d9"
 BTN_BLUE_ACT = "#357abd"
 BTN_RED = "#c0392b"
 BTN_RED_ACT = "#922b21"
+BTN_GRAY = "#444466"
+BTN_GRAY_ACT = "#333355"
 
 
 def get_current_dir() -> Path:
@@ -29,9 +37,12 @@ def get_current_dir() -> Path:
     return Path(__file__).parent
 
 
-def read_current_version(base_dir: Path) -> str:
+def read_current_version(base_dir: Path) -> tuple[str, str]:
+    """Retorna (versão, caminho_lido)."""
     vf = base_dir / VERSION_FILE
-    return vf.read_text(encoding="utf-8").strip() if vf.exists() else "0.0.0"
+    if vf.exists():
+        return vf.read_text(encoding="utf-8").strip(), str(vf)
+    return "0.0.0", f"{vf} (não encontrado, assumindo 0.0.0)"
 
 
 def parse_version(v: str) -> tuple:
@@ -41,16 +52,25 @@ def parse_version(v: str) -> tuple:
         return (0, 0, 0)
 
 
+def _gh_headers(accept: str = "application/vnd.github+json") -> dict:
+    h = {"Accept": accept}
+    if GITHUB_TOKEN and GITHUB_TOKEN != "SEU_TOKEN_AQUI":
+        h["Authorization"] = f"Bearer {GITHUB_TOKEN}"
+    return h
+
+
 def get_latest_release() -> dict:
-    resp = requests.get(
-        GITHUB_API_URL,
-        timeout=15,
-        headers={"Accept": "application/vnd.github+json"},
-    )
+    resp = requests.get(GITHUB_API_URL, timeout=15, headers=_gh_headers())
     if resp.status_code == 404:
         raise RuntimeError(
-            "Nenhuma versão publicada no GitHub ainda.\n"
-            f"Repositório: {GITHUB_REPO}"
+            f"Nenhum release publicado em github.com/{GITHUB_REPO}.\n"
+            "Crie e publique um release com AssistenteNotas.exe como asset.\n"
+            "(Releases em modo Draft não aparecem aqui.)"
+        )
+    if resp.status_code == 401:
+        raise RuntimeError(
+            "Token inválido ou expirado.\n"
+            "Gere um novo token em GitHub → Settings → Developer settings → Fine-grained tokens."
         )
     if resp.status_code == 403:
         raise RuntimeError("Limite de requisições da API do GitHub atingido. Aguarde alguns minutos.")
@@ -66,7 +86,13 @@ def find_asset(release: dict) -> dict | None:
 
 
 def download_file(url: str, dest: Path, progress_cb=None):
-    resp = requests.get(url, stream=True, timeout=180)
+    # Para repos privados usa a URL da API com Accept: octet-stream;
+    # para repos públicos usa a browser_download_url diretamente.
+    if GITHUB_TOKEN and GITHUB_TOKEN != "SEU_TOKEN_AQUI":
+        headers = _gh_headers("application/octet-stream")
+    else:
+        headers = {}
+    resp = requests.get(url, stream=True, timeout=180, headers=headers)
     resp.raise_for_status()
     total = int(resp.headers.get("content-length", 0))
     downloaded = 0
@@ -92,13 +118,14 @@ class UpdaterApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Assistente Notas — Atualizador")
-        self.geometry("460x300")
+        self.geometry("480x340")
         self.resizable(False, False)
         self.configure(bg=BG)
 
         self._base_dir = get_current_dir()
-        self._current_version = read_current_version(self._base_dir)
+        self._current_version, self._version_path = read_current_version(self._base_dir)
         self._latest_tag: str = ""
+        self._force = False
 
         self._build_ui()
         self.after(400, self._start_check)
@@ -106,68 +133,95 @@ class UpdaterApp(tk.Tk):
     # ── UI ────────────────────────────────────────────────
 
     def _build_ui(self):
-        # Título
         self._title_lbl = tk.Label(
             self, text="Verificando atualizações...",
             bg=BG, fg=FG, font=("Segoe UI", 13, "bold"),
         )
-        self._title_lbl.pack(pady=(24, 4))
+        self._title_lbl.pack(pady=(20, 2))
 
-        # Versão atual
-        tk.Label(
-            self, text=f"Versão instalada: {self._current_version}",
+        # Versão local + caminho
+        self._ver_local_lbl = tk.Label(
+            self,
+            text=f"Versão instalada: {self._current_version}",
             bg=BG, fg=FG_DIM, font=("Segoe UI", 9),
-        ).pack()
+        )
+        self._ver_local_lbl.pack()
 
-        # Status (multi-linha, envolve texto longo)
+        self._ver_path_lbl = tk.Label(
+            self,
+            text=f"({self._version_path})",
+            bg=BG, fg="#666688", font=("Segoe UI", 7),
+            wraplength=460,
+        )
+        self._ver_path_lbl.pack()
+
+        # Versão GitHub
+        self._ver_gh_lbl = tk.Label(
+            self, text="",
+            bg=BG, fg=FG_DIM, font=("Segoe UI", 9),
+        )
+        self._ver_gh_lbl.pack(pady=(2, 0))
+
+        # Status
         self._status_lbl = tk.Label(
             self, text="",
             bg=BG, fg=FG_DIM, font=("Segoe UI", 10),
-            wraplength=420, justify="center",
+            wraplength=440, justify="center",
         )
-        self._status_lbl.pack(pady=(8, 2))
+        self._status_lbl.pack(pady=(6, 2))
 
         # Barra de progresso
         self._progress = ttk.Progressbar(
-            self, orient="horizontal", length=400, mode="determinate"
+            self, orient="horizontal", length=420, mode="determinate"
         )
-        self._progress.pack(pady=(8, 4))
+        self._progress.pack(pady=(6, 4))
 
-        # Linha de botões
+        # Botões
         btn_row = tk.Frame(self, bg=BG)
-        btn_row.pack(pady=12)
+        btn_row.pack(pady=10)
+
+        self._force_btn = tk.Button(
+            btn_row, text="Forçar atualização",
+            state=tk.DISABLED,
+            bg=BTN_GRAY, fg=FG,
+            activebackground=BTN_GRAY_ACT, activeforeground=FG,
+            relief=tk.FLAT, font=("Segoe UI", 9, "bold"),
+            padx=12, pady=5, cursor="hand2",
+            command=self._force_update,
+        )
+        self._force_btn.pack(side="left", padx=(0, 6))
 
         self._retry_btn = tk.Button(
             btn_row, text="Tentar novamente",
             state=tk.DISABLED,
             bg=BTN_RED, fg=FG,
             activebackground=BTN_RED_ACT, activeforeground=FG,
-            relief=tk.FLAT, font=("Segoe UI", 10, "bold"),
-            padx=16, pady=6, cursor="hand2",
+            relief=tk.FLAT, font=("Segoe UI", 9, "bold"),
+            padx=12, pady=5, cursor="hand2",
             command=self._retry,
         )
-        self._retry_btn.pack(side="left", padx=(0, 8))
+        self._retry_btn.pack(side="left", padx=(0, 6))
 
         self._open_btn = tk.Button(
             btn_row, text="Abrir aplicativo",
             state=tk.DISABLED,
             bg=BTN_BLUE, fg=FG,
             activebackground=BTN_BLUE_ACT, activeforeground=FG,
-            relief=tk.FLAT, font=("Segoe UI", 10, "bold"),
-            padx=16, pady=6, cursor="hand2",
+            relief=tk.FLAT, font=("Segoe UI", 9, "bold"),
+            padx=12, pady=5, cursor="hand2",
             command=self._open_app_and_close,
         )
         self._open_btn.pack(side="left")
 
-        # Detalhes de erro (oculto por padrão)
+        # Detalhe de erro
         self._detail_lbl = tk.Label(
             self, text="",
             bg=BG, fg=FG_ERR, font=("Segoe UI", 8),
-            wraplength=420, justify="center",
+            wraplength=460, justify="center",
         )
-        self._detail_lbl.pack(pady=(0, 8))
+        self._detail_lbl.pack(pady=(0, 6))
 
-    # ── Helpers de UI (thread-safe via after) ─────────────
+    # ── Helpers de UI ─────────────────────────────────────
 
     def _set_title(self, text: str, color: str = FG):
         self._title_lbl.config(text=text, fg=color)
@@ -178,29 +232,47 @@ class UpdaterApp(tk.Tk):
     def _set_detail(self, text: str):
         self._detail_lbl.config(text=text)
 
+    def _set_gh_version(self, tag: str):
+        self._ver_gh_lbl.config(text=f"Versão no GitHub: {tag}" if tag else "")
+
     def _set_progress(self, value: float):
         self._progress["value"] = value * 100
 
     def _enable_open(self):
-        app_exists = (self._base_dir / APP_EXE_NAME).exists()
-        self._open_btn.config(state=tk.NORMAL if app_exists else tk.DISABLED)
+        exists = (self._base_dir / APP_EXE_NAME).exists()
+        self._open_btn.config(state=tk.NORMAL if exists else tk.DISABLED)
 
     def _enable_retry(self):
         self._retry_btn.config(state=tk.NORMAL)
 
-    # ── Fluxo principal ───────────────────────────────────
+    def _enable_force(self):
+        self._force_btn.config(state=tk.NORMAL)
+
+    def _disable_all(self):
+        for btn in (self._force_btn, self._retry_btn, self._open_btn):
+            btn.config(state=tk.DISABLED)
+
+    # ── Fluxo ─────────────────────────────────────────────
 
     def _start_check(self):
-        self._retry_btn.config(state=tk.DISABLED)
-        self._open_btn.config(state=tk.DISABLED)
+        self._disable_all()
         self._set_detail("")
         self._set_progress(0)
         threading.Thread(target=self._check_and_update, daemon=True).start()
 
     def _retry(self):
+        self._force = False
         self._set_title("Verificando atualizações...")
         self._set_status("Consultando GitHub...", FG_DIM)
+        self._set_gh_version("")
         self._start_check()
+
+    def _force_update(self):
+        self._force = True
+        self._disable_all()
+        self._set_title("Forçando atualização...")
+        self._set_status("Baixando versão mais recente...", FG_DIM)
+        threading.Thread(target=self._check_and_update, daemon=True).start()
 
     def _check_and_update(self):
         try:
@@ -215,31 +287,33 @@ class UpdaterApp(tk.Tk):
         self._latest_tag = release.get("tag_name", "0.0.0")
         tag = self._latest_tag
 
-        self.after(0, lambda: self._set_status(f"Última versão disponível: {tag}"))
+        self.after(0, lambda: self._set_gh_version(tag))
 
-        if parse_version(tag) <= parse_version(self._current_version):
+        already_up_to_date = parse_version(tag) <= parse_version(self._current_version)
+
+        if already_up_to_date and not self._force:
             self.after(0, lambda: self._set_title("Aplicativo já está atualizado ✓", FG_OK))
-            self.after(0, lambda: self._set_status(f"Versão {self._current_version} é a mais recente.", FG_DIM))
+            self.after(0, lambda: self._set_status(
+                f"Versão instalada ({self._current_version}) = versão no GitHub ({tag}).", FG_DIM
+            ))
             self.after(0, self._enable_open)
+            self.after(0, self._enable_force)
             return
 
         asset = find_asset(release)
         if not asset:
             nomes = [a["name"] for a in release.get("assets", [])]
-            detalhe = (
-                f"Assets no release: {', '.join(nomes)}"
-                if nomes else "Nenhum asset encontrado no release."
-            )
-            self.after(0, lambda: self._set_title(f"Update {tag} disponível, mas sem instalador"))
+            self.after(0, lambda: self._set_title("Instalador não encontrado no release", FG_ERR))
             self.after(0, lambda: self._set_status(
-                f"O arquivo '{APP_EXE_NAME}' não foi encontrado no release {tag}.", FG_ERR
+                f"O arquivo '{APP_EXE_NAME}' não está no release {tag}.", FG_ERR
             ))
+            detalhe = f"Assets encontrados: {', '.join(nomes)}" if nomes else "Nenhum asset no release."
             self.after(0, lambda: self._set_detail(detalhe))
             self.after(0, self._enable_open)
             self.after(0, self._enable_retry)
             return
 
-        # Download
+        # ── Download ──────────────────────────────────────
         self.after(0, lambda: self._set_title(f"Baixando versão {tag}..."))
         tmp_path = self._base_dir / f"{APP_EXE_NAME}.tmp"
 
@@ -248,7 +322,13 @@ class UpdaterApp(tk.Tk):
             self.after(0, lambda: self._set_status(f"Baixando {tag}... {pct}%"))
             self.after(0, lambda: self._set_progress(frac))
 
-        download_file(asset["browser_download_url"], tmp_path, _progress)
+        # Repo privado → URL da API (autenticada); público → URL direta
+        dl_url = (
+            asset["url"]
+            if GITHUB_TOKEN and GITHUB_TOKEN != "SEU_TOKEN_AQUI"
+            else asset["browser_download_url"]
+        )
+        download_file(dl_url, tmp_path, _progress)
 
         self.after(0, lambda: self._set_status("Encerrando versão anterior..."))
         kill_app()
@@ -258,17 +338,18 @@ class UpdaterApp(tk.Tk):
             app_path.unlink()
         tmp_path.rename(app_path)
 
-        (self._base_dir / VERSION_FILE).write_text(tag.lstrip("v"), encoding="utf-8")
+        new_ver = tag.lstrip("v")
+        (self._base_dir / VERSION_FILE).write_text(new_ver, encoding="utf-8")
+        self._current_version = new_ver
 
-        self.after(0, lambda: self._set_title(f"Atualização concluída! ✓", FG_OK))
+        self.after(0, lambda: self._set_title("Atualização concluída! ✓", FG_OK))
         self.after(0, lambda: self._set_status(f"Versão {tag} instalada com sucesso.", FG_DIM))
         self.after(0, lambda: self._set_progress(1.0))
         self.after(0, self._enable_open)
 
     def _on_error(self, exc: Exception):
         msg = str(exc)
-        # Simplifica mensagens HTTP longas
-        if "HTTPError" in type(exc).__name__ and "for url" in msg:
+        if "for url" in msg:
             msg = msg.split(" for url")[0]
         self._set_title("Erro ao verificar atualização", FG_ERR)
         self._set_status(msg, FG_ERR)
