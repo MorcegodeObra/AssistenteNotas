@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(gh release *)",
-      "PowerShell(gh release list --repo MorcegodeObra/AssistenteNotas 2>&1)"
+      "PowerShell(gh release list --repo MorcegodeObra/AssistenteNotas 2>&1)",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Repos\\\\AssistenteNotas\" -Recurse -Force | Select-Object -Property FullName | ForEach-Object { $_.FullName.Replace\\('c:\\\\Repos\\\\AssistenteNotas', '.'\\) } | Sort-Object)",
+      "Bash(Find c:\\\\Repos\\\\AssistenteNotas -type f -name \"*.py\" ! -path \"*/venv/*\" ! -path \"*/.git/*\")",
+      "Bash(Sort-Object)"
     ]
   }
 }
