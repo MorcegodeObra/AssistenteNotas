@@ -16,7 +16,7 @@ GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 # GitHub → Settings → Developer settings → Fine-grained tokens
 # Permissões: Contents (read-only) + Metadata (read-only)
 # Deixe "" para repositórios públicos.
-GITHUB_TOKEN = "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"
+GITHUB_TOKEN = ""
 
 BG = "#1a1a2e"
 FG = "white"
